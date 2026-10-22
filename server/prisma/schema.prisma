@@ -1,0 +1,161 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id           String        @id @default(uuid())
+  email        String        @unique
+  name         String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  conversations Conversation[]
+  memories     MemoryItem[]
+  contacts     Contact[]
+  salesTasks   SalesTask[]
+  auditEvents  AuditEvent[]
+}
+
+model Conversation {
+  id             String          @id @default(uuid())
+  title          String
+  userId         String
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isArchived     Boolean         @default(false)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  messages       Message[]
+  taskPlans      TaskPlan[]
+  toolExecutions ToolExecution[]
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String       // "user" | "assistant" | "system"
+  content        String
+  thoughtProcess String?      // Agent internal reasoning / thoughts
+  toolCalls      String?      // JSON string of tool calls requested
+  tokenCount     Int?
+  createdAt      DateTime     @default(now())
+}
+
+model TaskPlan {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  goal           String
+  status         String       // "planned" | "running" | "completed" | "failed" | "awaiting_approval" | "cancelled"
+  currentStep    Int          @default(0)
+  totalSteps     Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  steps          TaskStep[]
+}
+
+model TaskStep {
+  id               String    @id @default(uuid())
+  taskPlanId       String
+  taskPlan         TaskPlan  @relation(fields: [taskPlanId], references: [id], onDelete: Cascade)
+  stepNumber       Int
+  description      String
+  toolName         String?
+  toolInput        String?   // JSON
+  toolOutput       String?   // JSON
+  status           String    // "pending" | "running" | "completed" | "failed" | "blocked" | "skipped" | "awaiting_approval"
+  error            String?
+  requiresApproval Boolean   @default(false)
+  isApproved       Boolean?
+  approvedAt       DateTime?
+  startedAt        DateTime?
+  completedAt      DateTime?
+}
+
+model ToolExecution {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  toolName       String
+  inputPayload   String       // JSON
+  outputPayload  String?      // JSON
+  success        Boolean
+  executionMs    Int
+  errorMessage   String?
+  auditMetadata  String?      // JSON
+  createdAt      DateTime     @default(now())
+}
+
+model MemoryItem {
+  id                String   @id @default(uuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category          String   // "preference" | "fact" | "instruction" | "workflow"
+  key               String
+  value             String
+  userConsentGiven  Boolean  @default(true)
+  confidence        Float    @default(1.0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Contact {
+  id          String      @id @default(uuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  email       String?
+  phone       String?
+  company     String?
+  role        String?
+  status      String      @default("lead") // "lead" | "contacted" | "qualified" | "customer" | "churned"
+  notes       String?
+  leadScore   Int         @default(0)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  salesTasks  SalesTask[]
+}
+
+model SalesTask {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contactId   String?
+  contact     Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  title       String
+  description String?
+  dueDate     DateTime?
+  completed   Boolean   @default(false)
+  priority    String    @default("medium") // "low" | "medium" | "high" | "urgent"
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model AuditEvent {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  eventType  String   // e.g. "tool_executed", "approval_granted", "approval_rejected", "file_modified", "email_sent"
+  details    String   // JSON
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+}
+
+model BackgroundJob {
+  id          String    @id @default(uuid())
+  type        String    // e.g. "email_sync", "scheduled_followup", "web_research_deep", "document_index"
+  payload     String    // JSON
+  status      String    @default("queued") // "queued" | "processing" | "completed" | "failed" | "cancelled"
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(3)
+  result      String?   // JSON
+  error       String?
+  runAt       DateTime  @default(now())
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
