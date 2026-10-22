@@ -8,6 +8,8 @@ export interface CompletionOptions {
   maxTokens?: number;
   stop?: string[];
   streamCallback?: (token: string) => void;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface ModelProvider {

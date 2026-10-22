@@ -8,11 +8,13 @@ export interface GuardResult {
 const INJECTION_PATTERNS = [
   /ignore\s+(all\s+)?(previous|prior|above)\s+instructions/i,
   /disregard\s+(the\s+)?system\s+prompt/i,
-  /you\s+are\s+now\s+in\s+(developer|unrestricted|god)\s+mode/i,
+  /(system\s+prompt\s+)?override/i,
+  /you\s+are\s+now\s+(in\s+)?(dan|developer|unrestricted|god)\s*(mode)?/i,
   /bypass\s+security\s+policies/i,
   /override\s+permission\s+check/i,
   /reveal\s+(the\s+)?(system\s+prompt|api\s+key|environment\s+variables)/i,
-  /execute\s+arbitrary\s+(code|bash|powershell|sql)/i
+  /execute\s+arbitrary\s+(code|bash|powershell|sql)/i,
+  /jailbreak/i
 ];
 
 export function inspectPrompt(text: string): GuardResult {

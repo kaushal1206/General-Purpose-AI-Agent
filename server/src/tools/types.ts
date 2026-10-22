@@ -12,7 +12,10 @@ export interface ExecutionContext {
   };
 }
 
+export type ToolExecutionStatus = 'success' | 'error' | 'requires_approval' | 'skipped';
+
 export interface ToolResult {
+  status?: ToolExecutionStatus;
   success: boolean;
   data?: any;
   error?: string;

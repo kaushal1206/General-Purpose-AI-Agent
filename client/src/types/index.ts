@@ -88,7 +88,19 @@ export interface BackgroundJob {
 }
 
 export interface AgentEvent {
-  type: 'status' | 'thought' | 'token' | 'plan' | 'step_start' | 'tool_call' | 'tool_result' | 'approval_required' | 'complete' | 'error';
+  type:
+    | 'status'
+    | 'thought'
+    | 'token'
+    | 'plan'
+    | 'step_start'
+    | 'step_complete'
+    | 'step_failed'
+    | 'tool_call'
+    | 'tool_result'
+    | 'approval_required'
+    | 'complete'
+    | 'error';
   data: any;
   timestamp: string;
   conversationId?: string;

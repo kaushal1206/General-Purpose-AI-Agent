@@ -25,6 +25,22 @@ export const memoryTool: AgentTool = {
             return { success: false, error: 'key and value are required to store a memory' };
           }
 
+          // Security check: Never store sensitive secrets or credentials in long-term memory
+          const lowerVal = input.value.toLowerCase();
+          if (
+            /sk-[a-zA-Z0-9_]{15,}/.test(input.value) ||
+            /ghp_[a-zA-Z0-9_]{15,}/.test(input.value) ||
+            lowerVal.includes('bearer ') ||
+            lowerVal.includes('password') ||
+            lowerVal.includes('private key')
+          ) {
+            return {
+              status: 'error',
+              success: false,
+              error: 'Security policy violation: API keys, passwords, and sensitive credentials cannot be stored in long-term memory.'
+            };
+          }
+
           // Check if key already exists for this user
           const existing = await prisma.memoryItem.findFirst({
             where: { userId, key: input.key }

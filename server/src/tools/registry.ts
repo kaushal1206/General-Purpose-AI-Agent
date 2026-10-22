@@ -10,6 +10,20 @@ import { crmTool } from './crm.js';
 import { memoryTool } from './memory.js';
 import { prisma } from '../db/prisma.js';
 
+export function truncateToolData(data: any, maxChars = 8000): any {
+  if (data === undefined || data === null) return data;
+  if (typeof data === 'string') {
+    if (data.length <= maxChars) return data;
+    return data.slice(0, maxChars) + `\n... [Output truncated to ${maxChars} characters to protect model context]`;
+  }
+  const serialized = JSON.stringify(data);
+  if (serialized.length <= maxChars) return data;
+  return {
+    _truncated: true,
+    summary: serialized.slice(0, maxChars) + '... [Data truncated]'
+  };
+}
+
 export class ToolRegistry {
   private tools: Map<string, AgentTool> = new Map();
 
@@ -27,6 +41,14 @@ export class ToolRegistry {
 
   public register(tool: AgentTool) {
     this.tools.set(tool.name, tool);
+  }
+
+  public hasTool(name: string): boolean {
+    return this.tools.has(name);
+  }
+
+  public getToolNames(): string[] {
+    return Array.from(this.tools.keys());
   }
 
   public getTool(name: string): AgentTool | undefined {
@@ -51,6 +73,7 @@ export class ToolRegistry {
     const tool = this.tools.get(name);
     if (!tool) {
       return {
+        status: 'error',
         success: false,
         error: `Tool '${name}' not found in registry. Available tools: ${Array.from(this.tools.keys()).join(', ')}`
       };
@@ -62,9 +85,14 @@ export class ToolRegistry {
     try {
       validatedInput = tool.inputSchema.parse(rawInput);
     } catch (valErr: any) {
+      const issueDetails = valErr.issues
+        ? valErr.issues.map((i: any) => `${i.path.join('.') || 'input'}: ${i.message}`).join('; ')
+        : valErr.message;
+
       return {
+        status: 'error',
         success: false,
-        error: `Tool input schema validation failed: ${valErr.message}`
+        error: `Tool input schema validation failed: ${issueDetails}`
       };
     }
 
@@ -82,6 +110,7 @@ export class ToolRegistry {
           : `Approval required to execute '${tool.name}' with risk level '${tool.riskLevel}'.`;
 
         return {
+          status: 'requires_approval',
           success: false,
           requiresApproval: true,
           approvalPrompt: prompt,
@@ -95,21 +124,33 @@ export class ToolRegistry {
 
     // Execute tool
     try {
-      const result = await tool.execute(validatedInput, context);
+      const rawResult = await tool.execute(validatedInput, context);
       const duration = Date.now() - startTime;
 
-      // Log to database asynchronously
+      const result: ToolResult = {
+        ...rawResult,
+        status: rawResult.status || (rawResult.success ? 'success' : 'error'),
+        data: truncateToolData(rawResult.data)
+      };
+
+      // Log to database asynchronously if conversation exists
       if (context.conversationId) {
-        prisma.toolExecution.create({
-          data: {
-            conversationId: context.conversationId,
-            toolName: tool.name,
-            inputPayload: JSON.stringify(validatedInput),
-            outputPayload: JSON.stringify(result.data ?? result.error),
-            success: result.success,
-            executionMs: duration,
-            errorMessage: result.error,
-            auditMetadata: JSON.stringify(result.auditDetails ?? {})
+        prisma.conversation.findUnique({
+          where: { id: context.conversationId }
+        }).then(conv => {
+          if (conv) {
+            return prisma.toolExecution.create({
+              data: {
+                conversationId: context.conversationId,
+                toolName: tool.name,
+                inputPayload: JSON.stringify(validatedInput),
+                outputPayload: JSON.stringify(result.data ?? result.error),
+                success: result.success,
+                executionMs: duration,
+                errorMessage: result.error,
+                auditMetadata: JSON.stringify(result.auditDetails ?? {})
+              }
+            });
           }
         }).catch(() => {
           // Ignore async log failure
@@ -120,20 +161,27 @@ export class ToolRegistry {
     } catch (err: any) {
       const duration = Date.now() - startTime;
       if (context.conversationId) {
-        prisma.toolExecution.create({
-          data: {
-            conversationId: context.conversationId,
-            toolName: tool.name,
-            inputPayload: JSON.stringify(validatedInput),
-            outputPayload: null,
-            success: false,
-            executionMs: duration,
-            errorMessage: err.message
+        prisma.conversation.findUnique({
+          where: { id: context.conversationId }
+        }).then(conv => {
+          if (conv) {
+            return prisma.toolExecution.create({
+              data: {
+                conversationId: context.conversationId,
+                toolName: tool.name,
+                inputPayload: JSON.stringify(validatedInput),
+                outputPayload: null,
+                success: false,
+                executionMs: duration,
+                errorMessage: err.message
+              }
+            });
           }
         }).catch(() => {});
       }
 
       return {
+        status: 'error',
         success: false,
         error: `Internal tool execution exception: ${err.message}`
       };

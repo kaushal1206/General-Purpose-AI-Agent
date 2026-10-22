@@ -5,9 +5,10 @@ import fsSync from 'fs';
 import { AgentTool, ToolResult, ExecutionContext } from './types.js';
 import { config } from '../config/index.js';
 
-function validateAndResolvePath(relativePath: string): { resolved: string; error?: string } {
+function validateAndResolvePath(relativePath: string = '.'): { resolved: string; error?: string } {
+  const safeRelPath = relativePath || '.';
   // Normalize and prevent path traversal
-  const resolved = path.resolve(config.workspaceRoot, relativePath);
+  const resolved = path.resolve(config.workspaceRoot, safeRelPath);
   const rel = path.relative(config.workspaceRoot, resolved);
 
   if (rel.startsWith('..') || path.isAbsolute(rel)) {

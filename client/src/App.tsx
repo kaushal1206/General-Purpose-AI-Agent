@@ -184,6 +184,42 @@ export const App: React.FC = () => {
               setActivePlan(event.data.plan);
               break;
 
+            case 'step_start':
+              setActivePlan((prev) => {
+                if (!prev) return prev;
+                return {
+                  ...prev,
+                  steps: prev.steps.map((s) =>
+                    s.stepNumber === event.data.stepNumber ? { ...s, status: 'running' } : s
+                  )
+                };
+              });
+              break;
+
+            case 'step_complete':
+              setActivePlan((prev) => {
+                if (!prev) return prev;
+                return {
+                  ...prev,
+                  steps: prev.steps.map((s) =>
+                    s.stepNumber === event.data.stepNumber ? { ...s, status: 'completed' } : s
+                  )
+                };
+              });
+              break;
+
+            case 'step_failed':
+              setActivePlan((prev) => {
+                if (!prev) return prev;
+                return {
+                  ...prev,
+                  steps: prev.steps.map((s) =>
+                    s.stepNumber === event.data.stepNumber ? { ...s, status: 'failed' } : s
+                  )
+                };
+              });
+              break;
+
             case 'tool_call':
               setToolInvocations((prev) => [
                 ...prev,
