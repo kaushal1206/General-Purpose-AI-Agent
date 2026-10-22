@@ -28,34 +28,58 @@ export interface AgentRunOptions {
   signal?: AbortSignal;
 }
 
+function normalizeToolInput(tool: string, input: any): any {
+  if (typeof input === 'string') {
+    if (tool === 'calculator') return { expression: input };
+    if (tool === 'documents') return { documentPath: input };
+    if (tool === 'web_search') return { query: input };
+    if (tool === 'workspace_files') return { operation: 'read_file', filePath: input };
+  }
+  return input;
+}
+
+function tryParseToolJson(str: string): { tool: string; input: any } | null {
+  try {
+    const parsed = JSON.parse(str);
+    if (parsed.tool && parsed.input !== undefined) {
+      return { tool: parsed.tool.trim(), input: normalizeToolInput(parsed.tool.trim(), parsed.input) };
+    }
+  } catch {}
+
+  // Try relaxed single-quote JSON
+  try {
+    const relaxed = str.replace(/'/g, '"');
+    const parsed = JSON.parse(relaxed);
+    if (parsed.tool && parsed.input !== undefined) {
+      return { tool: parsed.tool.trim(), input: normalizeToolInput(parsed.tool.trim(), parsed.input) };
+    }
+  } catch {}
+
+  return null;
+}
+
 export function extractToolCall(text: string): { tool: string; input: any } | null {
   // 1. Try markdown fenced code block: ```json { "tool": "...", "input": {...} } ```
   const fencedMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?"tool"[\s\S]*?\})\s*```/i);
   if (fencedMatch) {
-    try {
-      const parsed = JSON.parse(fencedMatch[1]);
-      if (parsed.tool && parsed.input !== undefined) return parsed;
-    } catch {}
+    const result = tryParseToolJson(fencedMatch[1]);
+    if (result) return result;
   }
 
-  // 2. Try bare JSON matching {"tool": "...", "input": {...}}
-  const bareMatch = text.match(/(\{[\s\S]*?"tool"\s*:\s*"[^"]+"[\s\S]*?"input"\s*:\s*\{[\s\S]*?\}\s*\})/i);
+  // 2. Try bare JSON matching {"tool": "...", "input": ...}
+  const bareMatch = text.match(/(\{[\s\S]*?"tool"\s*:\s*['"][^'"]+['"][\s\S]*?"input"\s*:\s*[\{\["'].*?\})/i);
   if (bareMatch) {
-    try {
-      const parsed = JSON.parse(bareMatch[1]);
-      if (parsed.tool && parsed.input !== undefined) return parsed;
-    } catch {}
+    const result = tryParseToolJson(bareMatch[1]);
+    if (result) return result;
   }
 
   // 3. Search for outermost JSON object with "tool" and "input"
   const firstBrace = text.indexOf('{');
   const lastBrace = text.lastIndexOf('}');
   if (firstBrace !== -1 && lastBrace > firstBrace) {
-    try {
-      const candidate = text.substring(firstBrace, lastBrace + 1);
-      const parsed = JSON.parse(candidate);
-      if (parsed.tool && parsed.input !== undefined) return parsed;
-    } catch {}
+    const candidate = text.substring(firstBrace, lastBrace + 1);
+    const result = tryParseToolJson(candidate);
+    if (result) return result;
   }
 
   // 4. Action: tool_name / Action Input: {...}
@@ -63,12 +87,62 @@ export function extractToolCall(text: string): { tool: string; input: any } | nu
   if (actionMatch) {
     try {
       const input = JSON.parse(actionMatch[2]);
-      return { tool: actionMatch[1].trim(), input };
+      return { tool: actionMatch[1].trim(), input: normalizeToolInput(actionMatch[1].trim(), input) };
     } catch {}
   }
 
   return null;
 }
+
+/**
+ * Resolves template placeholders and maps verified outputs across dependent steps.
+ */
+export function resolveStepInput(
+  toolInput: any,
+  stepOutputs: Record<number, any>,
+  inputMapping?: Record<string, string>
+): any {
+  if (toolInput === null || toolInput === undefined) return {};
+  if (typeof toolInput !== 'object') return toolInput;
+
+  let resolved = Array.isArray(toolInput) ? [...toolInput] : { ...toolInput };
+
+  // 1. Explicit inputMapping from plan definition
+  if (inputMapping && !Array.isArray(resolved)) {
+    for (const [targetKey, sourceExpr] of Object.entries(inputMapping)) {
+      const match = sourceExpr.match(/^step_(\d+)(?:\.(.+))?$/);
+      if (match) {
+        const stepNum = parseInt(match[1], 10);
+        const field = match[2];
+        const stepOutput = stepOutputs[stepNum];
+        if (stepOutput !== undefined) {
+          resolved[targetKey] = field && typeof stepOutput === 'object' && stepOutput !== null
+            ? stepOutput[field] ?? stepOutput
+            : stepOutput;
+        }
+      }
+    }
+  }
+
+  // 2. Interpolate {{step_X.field}} or {{step_X}} placeholders
+  if (!Array.isArray(resolved)) {
+    for (const [k, v] of Object.entries(resolved)) {
+      if (typeof v === 'string') {
+        resolved[k] = v.replace(/\{\{step_(\d+)(?:\.([a-zA-Z0-9_]+))?\}\}/g, (_, sNum, sField) => {
+          const stepNum = parseInt(sNum, 10);
+          const out = stepOutputs[stepNum];
+          if (out === undefined) return '';
+          if (sField && typeof out === 'object' && out !== null) return String(out[sField] ?? '');
+          if (typeof out === 'object') return JSON.stringify(out);
+          return String(out);
+        });
+      }
+    }
+  }
+
+  return resolved;
+}
+
 
 /**
  * Independently asserts and verifies the concrete result of a step.
@@ -335,6 +409,11 @@ export class AgentOrchestrator {
 
       if (category === 'direct_response') {
         emit('status', { message: 'Generating direct response...' });
+        emit('step_start', {
+          stepNumber: 1,
+          description: 'Generate context-aware direct response'
+        });
+
         const directMessages: ChatMessage[] = [
           {
             role: 'system',
@@ -347,8 +426,8 @@ export class AgentOrchestrator {
           { role: 'user', content: prompt }
         ];
 
+        let answer = '';
         try {
-          let answer = '';
           const completion = await activeProvider.generateCompletion(directMessages, {
             temperature: 0.3,
             signal: abortController.signal,
@@ -372,9 +451,17 @@ export class AgentOrchestrator {
                 where: { id: dbPlan.id },
                 data: { status: 'completed' }
               });
+              await prisma.taskStep.updateMany({
+                where: { taskPlanId: dbPlan.id, stepNumber: 1 },
+                data: { status: 'completed', completedAt: new Date() }
+              });
             }
           } catch {}
 
+          emit('step_complete', {
+            stepNumber: 1,
+            description: 'Generate context-aware direct response'
+          });
           emit('complete', { summary: 'Answered directly without tool execution.' });
           return;
         } catch (err: any) {
@@ -382,6 +469,48 @@ export class AgentOrchestrator {
             emit('cancelled', { message: 'Task cancelled by user.' });
             return;
           }
+
+          if (answer.trim().length > 0) {
+            // Streaming finished or partially finished before stream cut
+            try {
+              await prisma.message.create({
+                data: { conversationId, role: 'user', content: prompt }
+              });
+              await prisma.message.create({
+                data: { conversationId, role: 'assistant', content: answer }
+              });
+              if (dbPlan) {
+                await prisma.taskPlan.update({
+                  where: { id: dbPlan.id },
+                  data: { status: 'completed' }
+                });
+                await prisma.taskStep.updateMany({
+                  where: { taskPlanId: dbPlan.id, stepNumber: 1 },
+                  data: { status: 'completed', completedAt: new Date() }
+                });
+              }
+            } catch {}
+
+            emit('step_complete', {
+              stepNumber: 1,
+              description: 'Generate context-aware direct response'
+            });
+            emit('complete', { summary: 'Answered directly without tool execution.' });
+            return;
+          }
+
+          if (dbPlan) {
+            await prisma.taskStep.updateMany({
+              where: { taskPlanId: dbPlan.id, stepNumber: 1 },
+              data: { status: 'failed', error: err.message }
+            }).catch(() => {});
+            await prisma.taskPlan.update({
+              where: { id: dbPlan.id },
+              data: { status: 'failed' }
+            }).catch(() => {});
+          }
+
+          emit('step_failed', { stepNumber: 1, error: err.message });
           emit('error', { error: `Direct completion failed: ${err.message}` });
           emit('complete', { summary: 'Failed to generate direct response.' });
           return;
@@ -485,6 +614,21 @@ Workspace Root: ${config.workspaceRoot}
           return;
         }
 
+        // Handle empty model output
+        if (currentStepOutput.trim().length === 0) {
+          if (iteration < maxIterations) {
+            emit('status', { message: 'Model returned empty response. Retrying step...' });
+            messages.push({
+              role: 'user',
+              content: 'Please proceed with the next step or state your final response.'
+            });
+            continue;
+          } else {
+            finalAssistantResponse = 'Model returned empty output after maximum attempts.';
+            break;
+          }
+        }
+
         // Extract thoughts
         const thoughtMatch = currentStepOutput.match(/<thought>([\s\S]*?)<\/thought>/);
         if (thoughtMatch) {
@@ -501,8 +645,11 @@ Workspace Root: ${config.workspaceRoot}
           break;
         }
 
+        const planStepDef = plan.steps[currentStepNumber - 1] || { number: currentStepNumber, description: 'Step execution' };
+        const resolvedInput = resolveStepInput(toolCall.input, stepOutputs, planStepDef.inputMapping);
+
         // Loop / Repetition Prevention
-        const inputKey = JSON.stringify(toolCall.input);
+        const inputKey = JSON.stringify(resolvedInput);
         const isIdenticalCall = executedToolCalls.some(
           c => c.tool === toolCall.tool && c.inputKey === inputKey
         );
@@ -528,7 +675,7 @@ Workspace Root: ${config.workspaceRoot}
           continue;
         }
 
-        emit('tool_call', { tool: toolCall.tool, input: toolCall.input });
+        emit('tool_call', { tool: toolCall.tool, input: resolvedInput });
         emit('step_start', { stepNumber: currentStepNumber, tool: toolCall.tool });
 
         // Update DB step status
@@ -540,8 +687,7 @@ Workspace Root: ${config.workspaceRoot}
         }
 
         // Execute Tool with Bounded Safe Retry
-        const planStepDef = plan.steps[currentStepNumber - 1] || { number: currentStepNumber, description: 'Step execution' };
-        let result = await toolRegistry.executeTool(toolCall.tool, toolCall.input, {
+        let result = await toolRegistry.executeTool(toolCall.tool, resolvedInput, {
           userId,
           conversationId,
           isApprovalGranted: false
@@ -549,13 +695,13 @@ Workspace Root: ${config.workspaceRoot}
 
         // Bounded Safe Retry for idempotent failures
         const isSafeForRetry = ['calculator', 'datetime'].includes(toolCall.tool) ||
-          (toolCall.tool === 'workspace_files' && ['list_files', 'read_file'].includes(toolCall.input?.operation)) ||
+          (toolCall.tool === 'workspace_files' && ['list_files', 'read_file'].includes(resolvedInput?.operation)) ||
           (toolCall.tool === 'documents');
 
         if (!result.success && isSafeForRetry && planStepDef.recoveryPolicy === 'retry_once') {
           emit('step_retrying', { stepNumber: currentStepNumber, attempt: 2, tool: toolCall.tool });
           await new Promise(r => setTimeout(r, 400));
-          result = await toolRegistry.executeTool(toolCall.tool, toolCall.input, {
+          result = await toolRegistry.executeTool(toolCall.tool, resolvedInput, {
             userId,
             conversationId,
             isApprovalGranted: false

@@ -8,7 +8,11 @@ import {
   AgentEvent
 } from '../types';
 
-const API_BASE = '/api';
+const rawBase = (import.meta as any).env?.VITE_API_URL || '';
+const API_BASE = rawBase
+  ? (rawBase.endsWith('/api') ? rawBase : `${rawBase.replace(/\/$/, '')}/api`)
+  : '/api';
+
 
 export const api = {
   // Capabilities
@@ -115,6 +119,21 @@ export const api = {
         }
       }
     });
+  },
+
+  // Cancel running execution
+  async cancelTask(conversationId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${API_BASE}/chat/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId })
+      });
+      const data = await res.json();
+      return Boolean(data.success);
+    } catch {
+      return false;
+    }
   },
 
   // Memory

@@ -193,10 +193,13 @@ apiRouter.post('/chat/stream', async (req: Request, res: Response) => {
     res.write(': keep-alive\n\n');
   }, 15000);
 
-  // Propagate client disconnect to agent orchestrator
-  req.on('close', () => {
-    agentOrchestrator.cancel(activeConvId);
-  });
+  // Propagate client disconnect to agent orchestrator if closed prematurely
+  const onClientDisconnect = () => {
+    if (!res.writableEnded) {
+      agentOrchestrator.cancel(activeConvId);
+    }
+  };
+  res.on('close', onClientDisconnect);
 
   try {
     await agentOrchestrator.execute({
@@ -220,6 +223,7 @@ apiRouter.post('/chat/stream', async (req: Request, res: Response) => {
     res.write(`data: ${errorPayload}\n\n`);
   } finally {
     clearInterval(heartbeat);
+    res.removeListener('close', onClientDisconnect);
     res.write(`data: [DONE]\n\n`);
     res.end();
   }

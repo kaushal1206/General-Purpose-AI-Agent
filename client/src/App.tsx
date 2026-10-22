@@ -379,8 +379,12 @@ export const App: React.FC = () => {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+    if (activeConversationId) {
+      api.cancelTask(activeConversationId).catch(() => {});
+    }
     setIsExecuting(false);
     setStatusMessage('Execution halted by user.');
+    setActivePlan((prev) => (prev ? { ...prev, status: 'cancelled' } : null));
   };
 
   // Diagnostic Checks
@@ -543,6 +547,11 @@ export const App: React.FC = () => {
             onSelectProvider={handleSelectProvider}
           />
         )}
+
+        {/* Global Developer Branding Footer */}
+        <footer className="app-footer">
+          Designed &amp; Developed by Kaushal Bhardwaj
+        </footer>
       </main>
     </div>
   );

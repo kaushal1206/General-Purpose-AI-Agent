@@ -45,20 +45,28 @@ export class OllamaProvider implements ModelProvider {
       }
     };
 
-    // Helper to create combined abort signal
-    const timeoutSignal = AbortSignal.timeout(timeoutMs);
-    let combinedSignal = timeoutSignal;
-    if (options?.signal) {
-      if (typeof (AbortSignal as any).any === 'function') {
-        combinedSignal = (AbortSignal as any).any([timeoutSignal, options.signal]);
-      } else {
-        const controller = new AbortController();
-        const onAbort = () => controller.abort();
-        timeoutSignal.addEventListener('abort', onAbort);
-        options.signal.addEventListener('abort', onAbort);
-        combinedSignal = controller.signal;
+    // 1. Initial connect / request timeout (generous for local CPU cold start)
+    const connectController = new AbortController();
+    let isTimedOut = false;
+    let isCancelled = false;
+
+    const userSignal = options?.signal;
+    const onUserAbort = () => {
+      isCancelled = true;
+      connectController.abort();
+    };
+
+    if (userSignal) {
+      if (userSignal.aborted) {
+        throw new Error('Ollama request was cancelled by the user or client.');
       }
+      userSignal.addEventListener('abort', onUserAbort);
     }
+
+    const connectTimer = setTimeout(() => {
+      isTimedOut = true;
+      connectController.abort();
+    }, timeoutMs);
 
     let response: Response;
     let attempt = 0;
@@ -71,22 +79,32 @@ export class OllamaProvider implements ModelProvider {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
-          signal: combinedSignal
+          signal: connectController.signal
         });
         break;
       } catch (err: any) {
-        if (err.name === 'TimeoutError' || err.message?.includes('timeout')) {
-          throw new Error(`Ollama request timed out after ${timeoutMs}ms. The model may be overloaded.`);
-        }
-        if (err.name === 'AbortError' || combinedSignal.aborted) {
+        if (isCancelled || userSignal?.aborted) {
+          clearTimeout(connectTimer);
+          if (userSignal) userSignal.removeEventListener('abort', onUserAbort);
           throw new Error('Ollama request was cancelled by the user or client.');
         }
+        if (isTimedOut) {
+          clearTimeout(connectTimer);
+          if (userSignal) userSignal.removeEventListener('abort', onUserAbort);
+          throw new Error(`Ollama request timed out after ${timeoutMs}ms. The model may be overloaded.`);
+        }
         if (attempt >= maxAttempts) {
+          clearTimeout(connectTimer);
+          if (userSignal) userSignal.removeEventListener('abort', onUserAbort);
           throw new Error(`Failed to connect to Ollama at ${this.baseUrl}: ${err.message}. Is Ollama running on port 11434?`);
         }
         // Brief backoff before 1 safe retry
         await new Promise(r => setTimeout(r, 500));
       }
+    }
+    clearTimeout(connectTimer);
+    if (userSignal) {
+      userSignal.removeEventListener('abort', onUserAbort);
     }
 
     if (!response!.ok) {
@@ -105,7 +123,7 @@ export class OllamaProvider implements ModelProvider {
       };
     }
 
-    // Handle Streaming Chunks
+    // Handle Streaming Chunks with sliding inactivity timeout
     let fullContent = '';
     const reader = response!.body?.getReader();
     if (!reader) {
@@ -115,15 +133,43 @@ export class OllamaProvider implements ModelProvider {
     const decoder = new TextDecoder();
     let buffer = '';
 
+    // Sliding inactivity timeout: reset every time a chunk is received
+    const inactivityTimeoutMs = 30000;
+    let inactivityTimer: NodeJS.Timeout | null = null;
+    let streamTimedOut = false;
+
+    const resetInactivityTimer = () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        streamTimedOut = true;
+        reader.cancel().catch(() => {});
+      }, inactivityTimeoutMs);
+    };
+
+    resetInactivityTimer();
+
+    const onStreamUserAbort = () => {
+      isCancelled = true;
+      reader.cancel().catch(() => {});
+    };
+
+    if (userSignal) {
+      userSignal.addEventListener('abort', onStreamUserAbort);
+    }
+
     try {
       while (true) {
-        if (combinedSignal.aborted) {
-          reader.cancel();
-          throw new Error('Streaming cancelled');
+        if (isCancelled || userSignal?.aborted) {
+          throw new Error('Ollama request was cancelled by the user or client.');
+        }
+        if (streamTimedOut) {
+          throw new Error(`Ollama streaming timed out (no tokens received for ${inactivityTimeoutMs / 1000}s).`);
         }
 
         const { done, value } = await reader.read();
         if (done) break;
+
+        resetInactivityTimer();
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -157,14 +203,22 @@ export class OllamaProvider implements ModelProvider {
         }
       }
     } catch (err: any) {
-      if (err.name === 'AbortError' || combinedSignal.aborted) {
-        throw new Error('Ollama stream aborted by client.');
+      if (isCancelled || userSignal?.aborted) {
+        throw new Error('Ollama request was cancelled by the user or client.');
+      }
+      if (streamTimedOut) {
+        throw new Error(`Ollama streaming timed out (no tokens received for ${inactivityTimeoutMs / 1000}s).`);
       }
       throw err;
     } finally {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      if (userSignal) {
+        userSignal.removeEventListener('abort', onStreamUserAbort);
+      }
       reader.releaseLock();
     }
 
     return { content: fullContent };
   }
 }
+

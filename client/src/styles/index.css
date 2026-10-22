@@ -583,3 +583,38 @@ body {
   border-color: rgba(255, 255, 255, 0.2);
   transform: translateY(-2px);
 }
+
+/* Application Layout Footer Attribution */
+.app-footer {
+  height: 38px;
+  min-height: 38px;
+  background: var(--bg-glass);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+  z-index: 10;
+  user-select: none;
+  font-family: var(--font-sans);
+  transition: color 0.15s ease;
+}
+
+.app-footer:hover {
+  color: var(--text-main);
+}
+
+@media (max-width: 768px) {
+  .app-footer {
+    height: 34px;
+    min-height: 34px;
+    font-size: 0.72rem;
+    padding: 0 12px;
+    text-align: center;
+  }
+}
+

@@ -93,6 +93,6 @@ export const config: AppConfig = {
     requireApprovalForExternalSend: process.env.REQUIRE_APPROVAL_FOR_EXTERNAL_SEND !== 'false',
     requireApprovalForFileDestructive: process.env.REQUIRE_APPROVAL_FOR_FILE_DESTRUCTIVE !== 'false',
     maxExecutionSteps: parseInt(process.env.MAX_EXECUTION_STEPS || '10', 10),
-    stepTimeoutMs: parseInt(process.env.STEP_TIMEOUT_MS || '30000', 10)
+    stepTimeoutMs: parseInt(process.env.STEP_TIMEOUT_MS || '60000', 10)
   }
 };
