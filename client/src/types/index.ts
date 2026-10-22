@@ -38,7 +38,8 @@ export interface TaskStep {
   stepNumber: number;
   description: string;
   toolName?: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'awaiting_approval';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'awaiting_approval' | 'verifying';
+  verificationStatus?: 'unverified' | 'verifying' | 'verified' | 'verification_failed';
   error?: string;
   requiresApproval?: boolean;
 }
@@ -46,7 +47,8 @@ export interface TaskStep {
 export interface TaskPlan {
   id?: string;
   goal: string;
-  status: 'planned' | 'running' | 'completed' | 'failed' | 'awaiting_approval';
+  status: 'planned' | 'running' | 'completed' | 'failed' | 'awaiting_approval' | 'cancelled';
+  lifecycleState?: string;
   currentStep: number;
   totalSteps: number;
   steps: TaskStep[];
@@ -94,11 +96,15 @@ export interface AgentEvent {
     | 'token'
     | 'plan'
     | 'step_start'
+    | 'step_verifying'
+    | 'step_verified'
+    | 'step_retrying'
     | 'step_complete'
     | 'step_failed'
     | 'tool_call'
     | 'tool_result'
     | 'approval_required'
+    | 'cancelled'
     | 'complete'
     | 'error';
   data: any;

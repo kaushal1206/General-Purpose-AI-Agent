@@ -159,6 +159,7 @@ export const structuredDataTool: AgentTool = {
           };
         }
       }
+      return { success: false, error: 'Unknown structured data operation' };
     } catch (err: any) {
       return { success: false, error: `Structured data error: ${err.message}` };
     }

@@ -196,6 +196,40 @@ export const App: React.FC = () => {
               });
               break;
 
+            case 'step_verifying':
+              setStatusMessage(`Verifying step ${event.data.stepNumber}...`);
+              setActivePlan((prev) => {
+                if (!prev) return prev;
+                return {
+                  ...prev,
+                  steps: prev.steps.map((s) =>
+                    s.stepNumber === event.data.stepNumber
+                      ? { ...s, status: 'verifying', verificationStatus: 'verifying' }
+                      : s
+                  )
+                };
+              });
+              break;
+
+            case 'step_verified':
+              setStatusMessage(`Step ${event.data.stepNumber} verified: ${event.data.message}`);
+              setActivePlan((prev) => {
+                if (!prev) return prev;
+                return {
+                  ...prev,
+                  steps: prev.steps.map((s) =>
+                    s.stepNumber === event.data.stepNumber
+                      ? { ...s, verificationStatus: 'verified' }
+                      : s
+                  )
+                };
+              });
+              break;
+
+            case 'step_retrying':
+              setStatusMessage(`Retrying step ${event.data.stepNumber} (attempt ${event.data.attempt})...`);
+              break;
+
             case 'step_complete':
               setActivePlan((prev) => {
                 if (!prev) return prev;
@@ -218,6 +252,12 @@ export const App: React.FC = () => {
                   )
                 };
               });
+              break;
+
+            case 'cancelled':
+              setStatusMessage('Task cancelled.');
+              setIsExecuting(false);
+              setActivePlan((prev) => (prev ? { ...prev, status: 'cancelled' } : null));
               break;
 
             case 'tool_call':

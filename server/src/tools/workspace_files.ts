@@ -141,6 +141,7 @@ export const workspaceFilesTool: AgentTool = {
           };
         }
       }
+      return { success: false, error: 'Unknown filesystem operation' };
     } catch (err: any) {
       return { success: false, error: `Filesystem operation failed: ${err.message}` };
     }

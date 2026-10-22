@@ -1,4 +1,4 @@
-import { TaskCategory, TaskPlanDefinition, PlanStepItem } from './types.js';
+import { TaskCategory, TaskPlanDefinition, PlanStepItem, VerificationMethod, StepRecoveryStrategy } from './types.js';
 
 export const KNOWN_TOOLS = [
   'calculator',
@@ -46,7 +46,9 @@ export function classifyRequest(prompt: string): TaskCategory {
     p.includes(' then ') ||
     p.includes(' and save ') ||
     p.includes(' and send ') ||
-    p.includes(' and write ');
+    p.includes(' and write ') ||
+    p.includes(' and summarize ') ||
+    p.includes(' and create ');
 
   const actionWordCount = [
     p.includes('calculate') || /[0-9]+\s*[\+\-\*\/%]\s*[0-9]+/.test(p),
@@ -152,12 +154,12 @@ export function classifyRequest(prompt: string): TaskCategory {
     return 'calculation';
   }
 
-  // 12. Default to Direct Response (explanations, trivia, general Q&A, greetings)
+  // 12. Default to Direct Response
   return 'direct_response';
 }
 
 /**
- * Validates plan structure, tool names, and acyclic step dependencies.
+ * Validates plan structure, tool names, acyclic dependencies, and verification specifications.
  */
 export function validatePlan(
   plan: TaskPlanDefinition,
@@ -204,7 +206,7 @@ export function validatePlan(
       }
     }
 
-    // Validate Dependencies: must only depend on strictly preceding steps
+    // Validate Dependencies
     if (step.dependsOnStep && Array.isArray(step.dependsOnStep)) {
       for (const dep of step.dependsOnStep) {
         if (dep >= step.number) {
@@ -212,6 +214,20 @@ export function validatePlan(
         } else if (dep < 1 || !seenStepNumbers.has(dep)) {
           errors.push(`Step ${step.number} references non-existent prerequisite step ${dep}.`);
         }
+      }
+    }
+
+    // Validate Verification Strategy if present
+    if (step.verification) {
+      const validMethods: VerificationMethod[] = [
+        'file_exists_and_matches',
+        'csv_rows_verified',
+        'crm_record_persisted',
+        'output_non_empty',
+        'none'
+      ];
+      if (!validMethods.includes(step.verification.method)) {
+        errors.push(`Step ${step.number} has invalid verification method '${step.verification.method}'.`);
       }
     }
   }
@@ -223,7 +239,7 @@ export function validatePlan(
 }
 
 /**
- * Generates a structured, dependency-aware plan with failure policies.
+ * Generates an autonomous, verification-driven plan with recovery policies.
  */
 export function generatePlan(
   prompt: string,
@@ -243,7 +259,10 @@ export function generatePlan(
           toolName: 'calculator',
           status: 'pending',
           recoveryPolicy: 'retry_once',
-          expectedOutput: 'Calculated numerical value'
+          recoveryStrategy: { policy: 'retry_once', maxRetries: 1, backoffMs: 500 },
+          expectedOutput: 'Calculated numerical value',
+          verification: { method: 'output_non_empty', description: 'Confirm non-empty numerical result' },
+          completionCondition: 'Valid mathematical result obtained'
         },
         {
           number: 2,
@@ -251,7 +270,8 @@ export function generatePlan(
           purpose: 'Present final mathematical solution',
           dependsOnStep: [1],
           status: 'pending',
-          recoveryPolicy: 'abort'
+          recoveryPolicy: 'abort',
+          completionCondition: 'Response formatted'
         }
       ];
       break;
@@ -265,7 +285,9 @@ export function generatePlan(
           toolName: 'workspace_files',
           status: 'pending',
           recoveryPolicy: 'abort',
-          expectedOutput: 'File content or confirmation of write'
+          expectedOutput: 'File content or confirmation of write',
+          verification: { method: 'output_non_empty', description: 'Confirm file operation output is returned' },
+          completionCondition: 'File operation succeeded in sandbox'
         },
         {
           number: 2,
@@ -287,7 +309,9 @@ export function generatePlan(
           toolName: 'documents',
           status: 'pending',
           recoveryPolicy: 'abort',
-          expectedOutput: 'Document text content'
+          expectedOutput: 'Document text content',
+          verification: { method: 'output_non_empty', description: 'Verify document content was read' },
+          completionCondition: 'Document content retrieved'
         },
         {
           number: 2,
@@ -309,7 +333,9 @@ export function generatePlan(
           toolName: 'structured_data',
           status: 'pending',
           recoveryPolicy: 'abort',
-          expectedOutput: 'Dataset structure and rows'
+          expectedOutput: 'Dataset structure and rows',
+          verification: { method: 'csv_rows_verified', description: 'Validate row count and headers' },
+          completionCondition: 'CSV schema parsed'
         },
         {
           number: 2,
@@ -319,7 +345,9 @@ export function generatePlan(
           dependsOnStep: [1],
           status: 'pending',
           recoveryPolicy: 'abort',
-          expectedOutput: 'Filtered or aggregated results'
+          expectedOutput: 'Filtered or aggregated results',
+          verification: { method: 'output_non_empty', description: 'Confirm aggregation results computed' },
+          completionCondition: 'Statistical transformation complete'
         },
         {
           number: 3,
@@ -341,7 +369,8 @@ export function generatePlan(
           toolName: 'web_search',
           status: 'pending',
           recoveryPolicy: 'abort',
-          expectedOutput: 'List of search results and snippets'
+          expectedOutput: 'List of search results and snippets',
+          verification: { method: 'output_non_empty', description: 'Verify citations or error status returned' }
         },
         {
           number: 2,
@@ -383,7 +412,8 @@ export function generatePlan(
           dependsOnStep: [2],
           status: 'pending',
           recoveryPolicy: 'abort',
-          expectedOutput: 'Delivery confirmation receipt'
+          expectedOutput: 'Delivery confirmation receipt',
+          verification: { method: 'output_non_empty', description: 'Confirm SMTP server response' }
         }
       ];
       break;
@@ -397,7 +427,8 @@ export function generatePlan(
           toolName: 'crm',
           status: 'pending',
           recoveryPolicy: 'abort',
-          expectedOutput: 'CRM records or lead summary'
+          expectedOutput: 'CRM records or lead summary',
+          verification: { method: 'output_non_empty', description: 'Verify database query returned records' }
         },
         {
           number: 2,
@@ -406,7 +437,8 @@ export function generatePlan(
           toolName: 'crm',
           dependsOnStep: [1],
           status: 'pending',
-          recoveryPolicy: 'abort'
+          recoveryPolicy: 'abort',
+          verification: { method: 'crm_record_persisted', description: 'Verify record is queryable in PostgreSQL' }
         }
       ];
       break;
@@ -420,7 +452,8 @@ export function generatePlan(
           toolName: 'memory',
           status: 'pending',
           recoveryPolicy: 'abort',
-          expectedOutput: 'Memory confirmation or retrieved items'
+          expectedOutput: 'Memory confirmation or retrieved items',
+          verification: { method: 'output_non_empty', description: 'Verify memory persistence confirmation' }
         },
         {
           number: 2,
@@ -434,11 +467,101 @@ export function generatePlan(
       break;
 
     case 'multi_step_workflow':
-      // Extract specific sub-intents
+      // Differentiate practical workflows
+      const isCsvToReport = (p.includes('csv') || p.includes('data')) && (p.includes('report') || p.includes('summary') || p.includes('file'));
+      const isDocSummary = (p.includes('document') || p.includes('readme')) && (p.includes('save') || p.includes('summary file'));
       const needsCalc = p.includes('calculate') || /[0-9]+\s*[\+\-\*\/%]\s*[0-9]+/.test(p);
       const needsFileWrite = p.includes('save') || p.includes('write') || p.includes('file');
 
-      if (needsCalc && needsFileWrite) {
+      if (isCsvToReport) {
+        // Track A4 Workflow 1: Data analysis report
+        steps = [
+          {
+            number: 1,
+            description: 'Parse CSV dataset and validate column structure',
+            purpose: 'Inspect schema and row count of dataset',
+            toolName: 'structured_data',
+            status: 'pending',
+            recoveryPolicy: 'abort',
+            expectedOutput: 'CSV columns and valid rows',
+            verification: { method: 'csv_rows_verified', description: 'Confirm dataset contains valid records' }
+          },
+          {
+            number: 2,
+            description: 'Compute statistical aggregations on dataset',
+            purpose: 'Calculate descriptive statistics from verified data',
+            toolName: 'structured_data',
+            dependsOnStep: [1],
+            status: 'pending',
+            recoveryPolicy: 'abort',
+            expectedOutput: 'Calculated statistical metrics',
+            verification: { method: 'output_non_empty', description: 'Ensure metrics were computed' }
+          },
+          {
+            number: 3,
+            description: 'Write analytical report file to workspace sandbox',
+            purpose: 'Persist findings and table summary into workspace file',
+            toolName: 'workspace_files',
+            dependsOnStep: [2],
+            status: 'pending',
+            recoveryPolicy: 'abort',
+            expectedOutput: 'File write confirmation',
+            verification: { method: 'file_exists_and_matches', description: 'Verify report file exists on disk' }
+          },
+          {
+            number: 4,
+            description: 'Independently read report file from disk to verify integrity',
+            purpose: 'Verify report is readable and accurately captures computed statistics',
+            toolName: 'workspace_files',
+            dependsOnStep: [3],
+            status: 'pending',
+            recoveryPolicy: 'abort',
+            expectedOutput: 'Verified report contents',
+            verification: { method: 'file_exists_and_matches', description: 'Confirm file content is intact' }
+          },
+          {
+            number: 5,
+            description: 'Summarize analysis and return verified file path to user',
+            purpose: 'Present final verified report outcome',
+            dependsOnStep: [4],
+            status: 'pending',
+            recoveryPolicy: 'abort'
+          }
+        ];
+      } else if (isDocSummary) {
+        // Track A4 Workflow 2: Document processing
+        steps = [
+          {
+            number: 1,
+            description: 'Read document content from workspace sandbox',
+            purpose: 'Extract text from permitted document',
+            toolName: 'documents',
+            status: 'pending',
+            recoveryPolicy: 'abort',
+            expectedOutput: 'Raw document text',
+            verification: { method: 'output_non_empty', description: 'Ensure document was read' }
+          },
+          {
+            number: 2,
+            description: 'Write extracted document summary to separate workspace file',
+            purpose: 'Persist structured summary in workspace',
+            toolName: 'workspace_files',
+            dependsOnStep: [1],
+            status: 'pending',
+            recoveryPolicy: 'abort',
+            expectedOutput: 'File write confirmation',
+            verification: { method: 'file_exists_and_matches', description: 'Confirm summary file was created on disk' }
+          },
+          {
+            number: 3,
+            description: 'Independently verify summary file and answer specific questions',
+            purpose: 'Confirm file exists and present answers with evidence',
+            dependsOnStep: [2],
+            status: 'pending',
+            recoveryPolicy: 'abort'
+          }
+        ];
+      } else if (needsCalc && needsFileWrite) {
         steps = [
           {
             number: 1,
@@ -447,7 +570,9 @@ export function generatePlan(
             toolName: 'calculator',
             status: 'pending',
             recoveryPolicy: 'retry_once',
-            expectedOutput: 'Calculated numerical result'
+            recoveryStrategy: { policy: 'retry_once', maxRetries: 1, backoffMs: 500 },
+            expectedOutput: 'Calculated numerical result',
+            verification: { method: 'output_non_empty', description: 'Verify mathematical result obtained' }
           },
           {
             number: 2,
@@ -458,7 +583,8 @@ export function generatePlan(
             inputMapping: { content: '1.result' },
             status: 'pending',
             recoveryPolicy: 'abort',
-            expectedOutput: 'Workspace file write confirmation'
+            expectedOutput: 'Workspace file write confirmation',
+            verification: { method: 'file_exists_and_matches', description: 'Confirm written file exists on disk' }
           },
           {
             number: 3,
@@ -539,6 +665,9 @@ export function generatePlan(
   const plan: TaskPlanDefinition = {
     goal: prompt,
     category,
+    lifecycleState: 'planning',
+    preconditions: ['User is authenticated', 'Workspace sandbox is available'],
+    completionConditions: ['All verified steps succeeded', 'User outcome fulfilled'],
     steps
   };
 

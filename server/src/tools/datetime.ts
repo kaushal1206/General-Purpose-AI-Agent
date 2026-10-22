@@ -84,6 +84,7 @@ export const datetimeTool: AgentTool = {
             }
           };
       }
+      return { success: false, error: 'Unknown datetime operation' };
     } catch (err: any) {
       return { success: false, error: err.message };
     }

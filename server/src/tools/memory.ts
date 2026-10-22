@@ -135,6 +135,7 @@ export const memoryTool: AgentTool = {
           };
         }
       }
+      return { success: false, error: 'Unknown memory action' };
     } catch (err: any) {
       return { success: false, error: `Memory operation failed: ${err.message}` };
     }

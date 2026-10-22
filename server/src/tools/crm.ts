@@ -218,6 +218,7 @@ export const crmTool: AgentTool = {
           };
         }
       }
+      return { success: false, error: 'Unknown CRM action' };
     } catch (err: any) {
       return { success: false, error: `CRM operation failed: ${err.message}` };
     }

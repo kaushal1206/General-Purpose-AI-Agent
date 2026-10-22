@@ -34,7 +34,7 @@ apiRouter.get('/capabilities', async (req: Request, res: Response) => {
 
 apiRouter.post('/capabilities/:id/check', async (req: Request, res: Response) => {
   try {
-    const status = await capabilityRegistry.runHealthCheck(req.params.id);
+    const status = await capabilityRegistry.runHealthCheck(req.params.id as string);
     res.json({ success: true, capability: status });
   } catch (err: any) {
     res.status(404).json({ success: false, error: err.message });
@@ -80,7 +80,7 @@ apiRouter.get('/tools', (req: Request, res: Response) => {
 apiRouter.post('/tools/:name/execute', async (req: Request, res: Response) => {
   try {
     const user = await getCurrentUser();
-    const result = await toolRegistry.executeTool(req.params.name, req.body, {
+    const result = await toolRegistry.executeTool(req.params.name as string, req.body, {
       userId: user.id,
       conversationId: '',
       isApprovalGranted: req.body.isApprovalGranted ?? false
@@ -128,7 +128,7 @@ apiRouter.post('/conversations', async (req: Request, res: Response) => {
 apiRouter.get('/conversations/:id', async (req: Request, res: Response) => {
   try {
     const conv = await prisma.conversation.findUnique({
-      where: { id: req.params.id },
+      where: { id: req.params.id as string },
       include: {
         messages: { orderBy: { createdAt: 'asc' } },
         taskPlans: {
@@ -153,7 +153,7 @@ apiRouter.get('/conversations/:id', async (req: Request, res: Response) => {
 
 apiRouter.delete('/conversations/:id', async (req: Request, res: Response) => {
   try {
-    await prisma.conversation.delete({ where: { id: req.params.id } });
+    await prisma.conversation.delete({ where: { id: req.params.id as string } });
     res.json({ success: true, message: 'Conversation deleted' });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -193,6 +193,11 @@ apiRouter.post('/chat/stream', async (req: Request, res: Response) => {
     res.write(': keep-alive\n\n');
   }, 15000);
 
+  // Propagate client disconnect to agent orchestrator
+  req.on('close', () => {
+    agentOrchestrator.cancel(activeConvId);
+  });
+
   try {
     await agentOrchestrator.execute({
       prompt: prompt || 'Resume approved task',
@@ -217,6 +222,24 @@ apiRouter.post('/chat/stream', async (req: Request, res: Response) => {
     clearInterval(heartbeat);
     res.write(`data: [DONE]\n\n`);
     res.end();
+  }
+});
+
+// 6B. Cancel active execution
+apiRouter.post('/chat/cancel', async (req: Request, res: Response) => {
+  try {
+    const { conversationId } = req.body;
+    if (!conversationId) {
+      return res.status(400).json({ success: false, error: 'conversationId is required' });
+    }
+    const cancelled = agentOrchestrator.cancel(conversationId);
+    res.json({
+      success: true,
+      cancelled,
+      message: cancelled ? 'Task cancelled successfully.' : 'No active execution found to cancel.'
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -255,7 +278,7 @@ apiRouter.post('/memory', async (req: Request, res: Response) => {
 
 apiRouter.delete('/memory/:id', async (req: Request, res: Response) => {
   try {
-    await prisma.memoryItem.delete({ where: { id: req.params.id } });
+    await prisma.memoryItem.delete({ where: { id: req.params.id as string } });
     res.json({ success: true, message: 'Memory deleted' });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });

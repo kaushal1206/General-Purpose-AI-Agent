@@ -50,6 +50,9 @@ export const TaskTimeline: React.FC<TaskTimelineProps> = ({
           if (step.status === 'running') {
             markerClass = 'running';
             icon = <Clock size={14} color="#818cf8" />;
+          } else if (step.status === 'verifying' || step.verificationStatus === 'verifying') {
+            markerClass = 'running';
+            icon = <Clock size={14} color="#a855f7" />;
           } else if (step.status === 'completed') {
             markerClass = 'completed';
             icon = <CheckCircle2 size={14} color="#10b981" />;
@@ -72,17 +75,31 @@ export const TaskTimeline: React.FC<TaskTimelineProps> = ({
                   {icon}
                 </div>
 
-                {step.toolName && (
-                  <span style={{ fontSize: '0.75rem', color: '#818cf8', fontFamily: 'var(--font-mono)' }}>
-                    tool: {step.toolName}
-                  </span>
-                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  {step.toolName && (
+                    <span style={{ fontSize: '0.75rem', color: '#818cf8', fontFamily: 'var(--font-mono)' }}>
+                      tool: {step.toolName}
+                    </span>
+                  )}
 
-                {step.requiresApproval && (
-                  <span style={{ fontSize: '0.72rem', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <AlertTriangle size={12} /> Requires approval
-                  </span>
-                )}
+                  {step.verificationStatus === 'verified' && (
+                    <span style={{ fontSize: '0.70rem', color: '#10b981', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                      <CheckCircle2 size={11} /> Verified
+                    </span>
+                  )}
+
+                  {step.verificationStatus === 'verifying' && (
+                    <span style={{ fontSize: '0.70rem', color: '#a855f7', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                      <Clock size={11} className="animate-spin" /> Verifying result
+                    </span>
+                  )}
+
+                  {step.requiresApproval && (
+                    <span style={{ fontSize: '0.72rem', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <AlertTriangle size={12} /> Requires approval
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           );
